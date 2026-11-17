@@ -40,7 +40,26 @@ SUB_L, SUB_R = 193, 887             # бокс субтитров (центр X 
 LINE_CHARS = 19
 MIN_CHUNK = 1.0
 HEAD_GAP = 30                       # зазор от волос/подбородка
-VENV = "/opt/mzpro"
+# облако: /opt/mzpro (root); компьютер без прав на /opt: ~/.mzpro
+VENV = "/opt/mzpro" if (os.path.isdir("/opt/mzpro") or os.access("/opt", os.W_OK)) \
+    else os.path.join(os.path.expanduser("~"), ".mzpro")
+MODEL_URLS = {
+    "face_landmarker.task": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+    "selfie_multiclass.tflite": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite",
+}
+
+
+def fetch_models():
+    """скачать модели mediapipe, если их нет в models/ (zip-версия скила идёт без них)"""
+    import urllib.request
+    os.makedirs(MODELS, exist_ok=True)
+    for f, url in MODEL_URLS.items():
+        p = os.path.join(MODELS, f)
+        if os.path.isfile(p) and os.path.getsize(p) > 100000:
+            continue
+        print("скачиваю модель %s …" % f)
+        urllib.request.urlretrieve(url, p + ".part")
+        os.replace(p + ".part", p)
 
 STYLES = {
     # тёплый минимализм: без плашек, тень + градиент, акцент тёмно-жёлтый
@@ -179,6 +198,7 @@ def cmd_setup(a):
             r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--break-system-packages"] + pk)
     if r.returncode != 0:
         die("не удалось поставить пакеты: %s" % " ".join(pk))
+    fetch_models()
     if not shutil.which("ffmpeg"):
         print("ffmpeg не найден. Поставь: Linux `apt-get install -y ffmpeg`, Mac `brew install ffmpeg`.")
     print("ГОТОВО: окружение поставлено")
