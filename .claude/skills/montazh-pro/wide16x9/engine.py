@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Абай жолы — 16:9 динамичный монтаж «Кино-эпик».
-usage:  python render.py sketch t1 t2 ...   -> sketch frames
-        python render.py render OUT.mp4      -> full render (4 workers)
+"""16:9 «Кино-эпик» — монтаж обзора книги. Всё про конкретное видео — в plan.json рядом со скриптом.
+usage (из .montazh/<имя>/, через /opt/mzpro/bin/python):
+  engine.py sketch OUTDIR t1 t2 ...   кадры-эскизы
+  engine.py sheet OUT.jpg             лист эскизов по plan.json "sketch" [[t, подпись], ...]
+  engine.py render OUT.mp4            полный рендер (4 процесса, без звука)
+  engine.py sfx OUT.wav               звуковой дизайн по plan.json
+  engine.py final SRC.mp4 OUT.mp4     видео + голос (без изменений) + sfx -> финал <= 90 МБ
+  engine.py cover OUT.png             обложка по plan.json "cover"
 """
 import os, sys, json, math, subprocess, functools
 import numpy as np, cv2
@@ -11,8 +16,9 @@ D = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(D + "/../..")
 FONTS = ROOT + "/.claude/skills/montazh-pro/fonts/"
 GRADED = D + "/graded.mp4"
+CFG = json.load(open(os.environ.get("PLAN", D + "/plan.json")))
 W, H, FPS = 1920, 1080, 30.0
-DUR = 50.245
+DUR = float(CFG["dur"])
 NFR = int(round(DUR * FPS))
 GOLD = (230, 180, 60)
 GOLD_L = (255, 226, 140)
@@ -242,20 +248,8 @@ def framed(name, height, border=6, radius=10, glow=True):
     return out
 
 # ------------------------------------------------------------------ words & chunks
-CHUNKS = [
-    "Қазақ әдебиетінде", "өз орнын айрықша", "қалыптастырған шығармалардың бірі —", "Мұхтар Әуезовтің",
-    "*«Абай жолы»* роман-эпопеясы",
-    "Бүгін біз осы ұлы шығарманың", "*бірінші томына* тоқталамыз",
-    "Романның алғашқы томында", "Абайдың балалық шағы,", "өскен ортасы,", "отбасылық тәрбиесі", "және өмірге деген көзқарасының",
-    "қалыптасуы баяндалады.",
-    "Шығармада *Құнанбайдың* болмысы,", "Зере мен Ұлжанның тәрбиесі,", "қазақ қоғамындағы", "әлеуметтік қатынастар мен",
-    "сол кезеңнің салт-дәстүрлері", "кеңінен көрініс табады.",
-    "Кітаптың басты ерекшелігі —", "бір адамның өмір жолы арқылы", "*тұтас бір дәуірдің*", "тыныс-тіршілігін танытуында.",
-    "Айта кетейік,", "осы кітапқа арналған", "анимациялық жарнамалық бейнеролик", "*Claude Code* көмегімен әзірленді.",
-    "Әдеби мұраны", "жаңа технологиямен таныту —", "*өткен мен бүгінді*", "байланыстырудың бір жолы.",
-    "Бұл — менің", "кітапқа арналған жарнамам.",
-]
-EXTRA = [("бұл", 45.85, 46.1), ("менің", 46.1, 46.5), ("кітапқа", 47.2, 47.65), ("арналған", 47.65, 48.1), ("жарнамам", 48.15, 49.0)]
+CHUNKS = CFG["chunks"]          # фразы субтитров, *акцент* звёздочками
+EXTRA = [tuple(x) for x in CFG.get("extra", [])]   # слова не из текста: [слово, s, e]
 
 def norm(s):
     return "".join(c for c in s.lower() if c.isalpha())
@@ -324,24 +318,9 @@ def face_slow(t):
     ys = [face_at(t + d)["cy"] for d in np.linspace(-0.8, 0.8, 9)]
     return sum(xs) / len(xs), sum(ys) / len(ys)
 
-# ------------------------------------------------------------------ timeline
-# modes: full / pip / bg
-SEGS = [
-    (0.00, 4.70, "full", None),
-    (4.70, 7.05, "bg", None),
-    (7.05, 10.05, "pip", dict(rect=(110, 120, 820, 580), r=36)),
-    (10.05, 13.95, "full", None),
-    (13.95, 17.95, "pip", dict(rect=(1140, 100, 600, 600), r=300)),
-    (17.95, 22.05, "bg", None),
-    (22.05, 27.05, "full", None),
-    (27.05, 31.70, "pip", dict(rect=(130, 120, 560, 560), r=30)),
-    (31.70, 34.30, "full", None),
-    (34.30, 36.95, "bg", None),
-    (36.95, 39.25, "full", None),
-    (39.25, 42.65, "pip", dict(rect=(1010, 120, 800, 570), r=36)),
-    (42.65, 49.00, "full", None),
-    (49.00, DUR + 1, "bg", None),
-]
+# ------------------------------------------------------------------ timeline (from plan.json)
+SEGS = [(s[0], s[1], s[2], s[3] if len(s) > 3 else None) for s in CFG["segs"]]
+SEGS[-1] = (SEGS[-1][0], DUR + 1, SEGS[-1][2], SEGS[-1][3])
 TR = 0.45  # pip transition
 
 def seg_at(t):
@@ -351,13 +330,8 @@ def seg_at(t):
     return len(SEGS) - 1, SEGS[-1]
 
 # camera zoom keys for full mode: (t, zoom)
-ZK = [(0.0, 1.0), (3.6, 1.07), (4.7, 1.07),
-      (10.05, 1.13), (11.0, 1.08), (11.8, 1.0), (13.95, 1.0),
-      (22.05, 1.0), (24.9, 1.04), (25.15, 1.12), (27.05, 1.14),
-      (31.70, 1.0), (32.05, 1.0), (32.25, 1.12), (33.15, 1.12), (33.35, 1.0), (34.3, 1.04),
-      (36.95, 1.0), (39.25, 1.0),
-      (42.65, 1.0), (43.2, 1.0), (43.45, 1.1), (45.8, 1.1), (46.0, 1.0), (49.0, 1.09)]
-HARD = {10.05, 25.15, 32.25, 43.45}
+ZK = [tuple(x) for x in CFG.get("zoom", [[0, 1.0]])]
+HARD = set(CFG.get("hard", []))
 
 def zoom_at(t):
     for (t0, z0), (t1, z1) in zip(ZK, ZK[1:]):
@@ -490,10 +464,7 @@ def person_alpha(rgb_u8):
     a = cv2.GaussianBlur(a, (0, 0), 1.5)
     return a[..., None]
 
-BEHIND = [  # (s, e, text, kind)
-    (11.85, 13.95, "БАЛАЛЫҚ", "rise"),
-    (36.95, 39.25, "CLAUDE CODE", "type"),
-]
+BEHIND = [tuple(b) for b in CFG.get("behind", [])]   # [s, e, ТЕКСТ, "rise"|"type"]
 
 def draw_behind(dst, t, b, face, z, px, py):
     s, e, txt, kind = b
@@ -729,21 +700,29 @@ def char_card(kind):
     cx = cw / 2
     # halo
     d.ellipse(L(cx - 120, 50, cx + 120, 290), fill=(40, 80, 64, 255))
-    if kind == "kunanbai":
+    kind = {"kunanbai": "man_hat", "zere": "old_woman", "ulzhan": "woman"}.get(kind, kind)
+    if kind == "man_hat":
         d.pieslice(L(cx - 140, 230, cx + 140, 470), 180, 360, fill=g)              # shoulders
         d.ellipse(L(cx - 56, 112, cx + 56, 236), fill=g)                           # head
         d.polygon(L(cx - 40, 200, cx + 40, 200, cx + 24, 268, cx, 286, cx - 24, 268), fill=g)  # beard
         d.polygon(L(cx - 70, 136, cx + 70, 136, cx + 50, 64, cx, 46, cx - 50, 64), fill=gd)     # tall hat
         d.rectangle(L(cx - 76, 128, cx + 76, 146), fill=g)
         d.line(L(cx, 290, cx, 360), fill=gd, width=5 * s)
-    elif kind == "zere":
+    elif kind in ("man", "boy"):
+        k = 0.82 if kind == "boy" else 1.0
+        d.pieslice(L(cx - 140 * k, 250, cx + 140 * k, 480), 180, 360, fill=g)
+        d.ellipse(L(cx - 54 * k, 120, cx + 54 * k, 240), fill=g)
+        d.pieslice(L(cx - 56 * k, 104, cx + 56 * k, 176), 180, 360, fill=gd)        # skullcap
+        if kind == "man":
+            d.polygon(L(cx - 36, 206, cx + 36, 206, cx + 18, 254, cx, 266, cx - 18, 254), fill=gd)  # short beard
+    elif kind == "old_woman":
         d.pieslice(L(cx - 130, 236, cx + 130, 470), 180, 360, fill=g)
         d.ellipse(L(cx - 86, 84, cx + 86, 300), fill=(250, 240, 220, 255))        # kimeshek
         d.ellipse(L(cx - 50, 120, cx + 50, 236), fill=g)                           # face
         d.ellipse(L(cx - 82, 66, cx + 82, 150), fill=(250, 240, 220, 255))        # turban top
         d.arc(L(cx - 70, 74, cx + 70, 140), 200, 340, fill=gd, width=4 * s)
         d.arc(L(cx - 30, 196, cx + 30, 224), 20, 160, fill=gd, width=3 * s)
-    else:  # ulzhan
+    else:  # woman
         d.pieslice(L(cx - 130, 236, cx + 130, 470), 180, 360, fill=g)
         d.polygon(L(cx - 80, 110, cx + 80, 110, cx + 100, 300, cx - 100, 300), fill=gd)  # scarf
         d.ellipse(L(cx - 80, 60, cx + 80, 200), fill=gd)
@@ -752,8 +731,6 @@ def char_card(kind):
             d.ellipse(L(cx - 70 + k * 35 - 5, 280, cx - 70 + k * 35 + 5, 290), fill=g)
     return vec_done(im)
 
-CARDS = [("kunanbai", "ҚҰНАНБАЙ", "Абайдың әкесі", 18.85), ("zere", "ЗЕРЕ", "Абайдың әжесі", 20.05),
-         ("ulzhan", "ҰЛЖАН", "Абайдың анасы", 20.75)]
 
 # ---------- yurt (draw-on)
 def draw_yurt(dst, t, s0, cx, cy, wd=400, op=1.0):
@@ -814,7 +791,7 @@ def hills_layer(seed, color, amp, base, w=1100, h=620):
     img[..., 3] = m
     return img
 
-def mini_film(t, t0, w=1100, h=620):
+def mini_film(t, t0, title="", dur=2.6, w=1100, h=620):
     tt = t - t0
     sky = np.zeros((h, w, 3), np.float32)
     p = np.linspace(0, 1, h, dtype=np.float32)[:, None, None]
@@ -849,13 +826,13 @@ def mini_film(t, t0, w=1100, h=620):
     cv2.circle(sky, (rx + 4, ry - 50), 11, col, -1, cv2.LINE_AA)
     cv2.line(sky, (rx + 2, ry - 40), (rx + 6, ry - 14), col, 12, cv2.LINE_AA)
     # title in film
-    if tt > 1.3:
+    if tt > 1.3 and title:
         k = eout(prog(t, t0 + 1.3, 0.5))
-        text_draw(sky, "АБАЙ ЖОЛЫ", w / 2, 170 + (1 - k) * 40, 96, op=k, fname="Black",
+        text_draw(sky, title, w / 2, 170 + (1 - k) * 40, fit_size(title, "Black", 96, w - 120), op=k, fname="Black",
                   grad=(GOLD_L, GOLD), extrude=5, ext_col=(80, 45, 10), shadow=0.6)
     # film UI
     cv2.rectangle(sky, (40, h - 40), (w - 40, h - 34), (1, 1, 1), -1)
-    cv2.rectangle(sky, (40, h - 40), (40 + int((w - 80) * clamp(tt / 2.6)), h - 34), (1.0, 0.8, 0.4), -1)
+    cv2.rectangle(sky, (40, h - 40), (40 + int((w - 80) * clamp(tt / dur)), h - 34), (1.0, 0.8, 0.4), -1)
     rgba = np.dstack([np.clip(sky, 0, 1), rounded_mask(w, h, 26)])
     # border
     e = np.clip(rgba[..., 3] - cv2.erode(rgba[..., 3], np.ones((7, 7), np.uint8)), 0, 1)[..., None]
@@ -918,194 +895,257 @@ def face_window(dst, frame, t, geom, p):
         reg *= (1 - e)
         reg += e * np.array([1.0, 0.83, 0.45], np.float32)
 
-# ------------------------------------------------------------------ per-segment graphics
-def g_intro(dst, t, face, z, px, py):
-    # face-tracked labels
-    ax, ay = cam_pt(face["x0"] + 10, face["cy"] - 40, z, px, py)
-    label_tag(dst, t, 0.3, 3.5, "ҚАЗАҚ ӘДЕБИЕТІ", "классика", ax - 70, ay - 120, "l", anchor_pt=(ax - 20, ay))
-    bx, by = cam_pt(face["x1"] - 10, face["cy"] - 20, z, px, py)
-    label_tag(dst, t, 3.65, 4.75, "МҰХТАР ӘУЕЗОВ", "жазушы, 1897–1961", bx + 150, by - 110, "r", anchor_pt=(bx + 20, by))
+# ------------------------------------------------------------------ scene library (driven by plan.json "scenes")
+GRAD_GOLD = ((255, 240, 190), (212, 148, 38))
+SERIF = "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"
 
-def g_title(dst, t, s0=4.70, end=7.05):
+def free_area(t):
+    """x-range not covered by the face window in pip mode (whole width otherwise)"""
+    i, seg = seg_at(t)
+    if seg[2] != "pip":
+        return 60, W - 60
+    x, y, w, h = seg[3]["rect"]
+    if x + w / 2 < W / 2:
+        return x + w + 50, W - 70
+    return 70, x - 50
+
+def fit_size(txt, fname, size, maxw, track=0):
+    w_ = text_w(txt, font(fname, size), track)
+    return int(size * min(1.0, maxw / max(1, w_)))
+
+def sc_label(dst, t, sc, face, z, px, py):
+    if sc.get("side", "l") == "l":
+        ax, ay = cam_pt(face["x0"] + 10, face["cy"] - 40, z, px, py)
+        label_tag(dst, t, sc["s"], sc["e"], sc["text"], sc.get("sub"), ax - 70, ay - 120, "l", anchor_pt=(ax - 20, ay))
+    else:
+        bx, by = cam_pt(face["x1"] - 10, face["cy"] - 20, z, px, py)
+        label_tag(dst, t, sc["s"], sc["e"], sc["text"], sc.get("sub"), bx + 150, by - 110, "r", anchor_pt=(bx + 20, by))
+
+def big_title(dst, t, s0, lines, cx, cy, size, op):
+    """3D gold title, letters flip in one by one; lines = list of strings"""
+    k = 0
+    n = len(lines)
+    for li, line in enumerate(lines):
+        sz = fit_size(line, "Black", size, 1000, 4)
+        f = font("Black", sz)
+        x = cx - text_w(line, f, 4) / 2
+        y = cy + (li - (n - 1) / 2) * size * 1.05
+        for c in line:
+            cw = f.getlength(c)
+            if c != " ":
+                q = prog(t, s0 + 0.1 + k * 0.05, 0.5)
+                text_draw(dst, c, x + cw / 2, y + (1 - eout(q)) * -60, sz, op=op * eout(q), rx=(1 - eback(q)) * -90,
+                          fname="Black", grad=GRAD_GOLD, extrude=max(4, sz // 13), ext_col=(95, 58, 12),
+                          shadow=0.7, glow=((255, 190, 80), 0.25))
+            x += cw + 4
+            k += 1
+
+def sc_title(dst, t, sc):
+    s0, end = sc["s"], sc["e"]
     p = prog(t, s0, 0.75)
-    cov = framed("cover.png", 600)
-    ry = lerp(-85, -16, eback(p, 1.2)) + 4 * math.sin(t * 1.3)
-    sc = lerp(0.55, 1.0, eout(p))
     op = eout(prog(t, s0, 0.25)) * (1 - ein(prog(t, end - 0.15, 0.15)))
-    warp(dst, cov, 470, 400, ry=ry, rx=3 * math.sin(t), s=sc, op=op)
-    text_draw(dst, "МҰХТАР ӘУЕЗОВ", 1300, 175, 40, op=op * eout(prog(t, s0 + 0.1, 0.4)), fname="Bold", track=10,
-              fill=(235, 225, 200))
-    title = "АБАЙ ЖОЛЫ"
-    f = font("Black", 128)
-    tw_ = text_w(title, f, 4)
-    x = 1300 - tw_ / 2
-    for i, c in enumerate(title):
-        cw = f.getlength(c)
-        if c != " ":
-            q = prog(t, s0 + 0.1 + i * 0.06, 0.5)
-            text_draw(dst, c, x + cw / 2, 320 + (1 - eout(q)) * -60, 128, op=op * eout(q), rx=(1 - eback(q)) * -90,
-                      fname="Black", grad=((255, 240, 190), (212, 148, 38)), extrude=10, ext_col=(95, 58, 12),
-                      shadow=0.7, glow=((255, 190, 80), 0.25))
-        x += cw + 4
+    if sc.get("img"):
+        cov = framed(sc["img"], 600)
+        warp(dst, cov, 470, 400, ry=lerp(-85, -16, eback(p, 1.2)) + 4 * math.sin(t * 1.3), rx=3 * math.sin(t),
+             s=lerp(0.55, 1.0, eout(p)), op=op)
+        cx = 1300
+    else:
+        cx = 960
+    lines = sc["title"].split("\n")
+    if sc.get("author"):
+        text_draw(dst, sc["author"], cx, 330 - 80 * len(lines) - 10, 40, op=op * eout(prog(t, s0 + 0.1, 0.4)),
+                  fname="Bold", track=10, fill=(235, 225, 200))
+    big_title(dst, t, s0, lines, cx, 320, 128, op)
     q = prog(t, s0 + 0.7, 0.8)
-    if q > 0:
-        tr = int(lerp(2, 22, eout(q)))
-        text_draw(dst, "РОМАН-ЭПОПЕЯ", 1300, 460, 46, op=op * eout(q), fname="Medium", track=tr, fill=(255, 240, 210))
+    if q > 0 and sc.get("subtitle"):
+        yb = 320 + 64 * len(lines) + 70
+        text_draw(dst, sc["subtitle"], cx, yb, 46, op=op * eout(q), fname="Medium", track=int(lerp(2, 22, eout(q))), fill=(255, 240, 210))
         lw = int(260 * eout(q))
-        cv2.line(dst, (1300 - lw, 520), (1300 + lw, 520), (1.0, 0.82, 0.45), 2, cv2.LINE_AA)
-    gold_burst(dst, t, s0 + 0.15, 1300, 320, 80, 520)
+        cv2.line(dst, (cx - lw, yb + 60), (cx + lw, yb + 60), (1.0, 0.82, 0.45), 2, cv2.LINE_AA)
+    gold_burst(dst, t, s0 + 0.15, cx, 320, 80, 520)
 
-def g_volume(dst, t, s0=7.05, end=10.05):
-    book = asset("book3d.png", height=500)
+def sc_volume(dst, t, sc):
+    """3D product photo spins in + big numeral (e.g. 'I ТОМ')"""
+    s0, end = sc["s"], sc["e"]
+    a0, a1 = free_area(t)
+    bx, nx = a0 + (a1 - a0) * 0.33, a0 + (a1 - a0) * 0.8
+    book = asset(sc["img"], height=sc.get("h", 500))
     p = prog(t, s0 + 0.2, 0.9)
     op = eout(prog(t, s0 + 0.2, 0.3)) * (1 - ein(prog(t, end - 0.35, 0.3)))
-    ry = lerp(160, -18, eout(p)) + 6 * math.sin(t * 1.5)
-    # glow
     gl = np.zeros((H, W), np.float32)
-    cv2.circle(gl, (1230, 410), 200, 1, -1)
-    gl = cv2.GaussianBlur(gl, (0, 0), 70)[..., None] * 0.45 * op
-    dst += gl * np.array([1.0, 0.75, 0.3], np.float32)
-    warp(dst, book, 1230, 410 + 8 * math.sin(t * 2), ry=ry, s=lerp(0.7, 1.0, eout(p)), op=op)
-    q = prog(t, 8.75, 0.5)
+    cv2.circle(gl, (int(bx), 410), 200, 1, -1)
+    dst += cv2.GaussianBlur(gl, (0, 0), 70)[..., None] * 0.45 * op * np.array([1.0, 0.75, 0.3], np.float32)
+    warp(dst, book, bx, 410 + 8 * math.sin(t * 2), ry=lerp(160, -18, eout(p)) + 6 * math.sin(t * 1.5), s=lerp(0.7, 1.0, eout(p)), op=op)
+    tn = sc.get("t_num")
+    if tn is None:
+        return
+    q = prog(t, tn, 0.5)
     if q > 0:
-        text_draw(dst, "БІРІНШІ", 1610, 300, 40, op=op * eout(q), fname="Bold", track=8, fill=(255, 236, 190))
-        text_draw(dst, "I", 1610, 430, 210, op=op * eout(q), s=lerp(1.6, 1.0, eout(q)), ry=(1 - eout(q)) * 80,
-                  fname="/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf", grad=((255, 240, 190), (212, 148, 38)),
-                  extrude=10, ext_col=(95, 58, 12), shadow=0.7, glow=((255, 190, 80), 0.3))
-        text_draw(dst, "ТОМ", 1610, 580, 64, op=op * eout(prog(t, 8.95, 0.4)), fname="Black", track=10, fill=(255, 255, 255))
-        gold_burst(dst, t, 8.8, 1610, 430, 60, 330)
+        if sc.get("top"):
+            text_draw(dst, sc["top"], nx, 300, 40, op=op * eout(q), fname="Bold", track=8, fill=(255, 236, 190))
+        text_draw(dst, sc.get("num", "I"), nx, 430, 210, op=op * eout(q), s=lerp(1.6, 1.0, eout(q)), ry=(1 - eout(q)) * 80,
+                  fname=SERIF, grad=GRAD_GOLD, extrude=10, ext_col=(95, 58, 12), shadow=0.7, glow=((255, 190, 80), 0.3))
+        if sc.get("bottom"):
+            text_draw(dst, sc["bottom"], nx, 580, 64, op=op * eout(prog(t, tn + 0.2, 0.4)), fname="Black", track=10, fill=(255, 255, 255))
+        gold_burst(dst, t, tn + 0.05, nx, 430, 60, 330)
 
-def g_abai(dst, t, s0=10.3, end=12.05):
+def sc_medallion(dst, t, sc):
+    """oval portrait (internet photo) with gold ring + name"""
+    s0, end = sc["s"], sc["e"]
     vis = window(t, s0, end, 0.35, 0.3)
     if vis <= 0:
         return
+    x, y = sc.get("x", 330), sc.get("y", 380)
     p = prog(t, s0, 0.6)
-    a = asset("abai.png", height=470)
-    warp(dst, a, 330, 380, ry=lerp(55, 0, eout(p)) + 3 * math.sin(t * 2), s=lerp(0.6, 1.0, eback(p)) * (1 - 0.3 * ein(prog(t, end - 0.3, 0.3))), op=vis)
-    cv2.ellipse(dst, (330, 380), (int(176 * eout(p)), int(236 * eout(p))), 0, -90, -90 + 360 * eout(p), (1.0, 0.82, 0.45), 3, cv2.LINE_AA)
-    text_draw(dst, "АБАЙ ҚҰНАНБАЙҰЛЫ", 330, 660, 34, op=vis * eout(prog(t, s0 + 0.3, 0.3)), fname="ExtraBold", track=4,
-              fill=(255, 236, 190))
-    text_draw(dst, "1845–1904", 330, 702, 26, op=vis * eout(prog(t, s0 + 0.4, 0.3)) * 0.85, fname="Medium", fill=(230, 230, 230))
+    a = asset(sc["img"], height=470)
+    warp(dst, a, x, y, ry=lerp(55, 0, eout(p)) + 3 * math.sin(t * 2), s=lerp(0.6, 1.0, eback(p)) * (1 - 0.3 * ein(prog(t, end - 0.3, 0.3))), op=vis)
+    cv2.ellipse(dst, (int(x), int(y)), (int(a.shape[1] / 2 * eout(p)), int(236 * eout(p))), 0, -90, -90 + 360 * eout(p), (1.0, 0.82, 0.45), 3, cv2.LINE_AA)
+    if sc.get("name"):
+        text_draw(dst, sc["name"], x, y + 280, 34, op=vis * eout(prog(t, s0 + 0.3, 0.3)), fname="ExtraBold", track=4, fill=(255, 236, 190))
+    if sc.get("sub"):
+        text_draw(dst, sc["sub"], x, y + 322, 26, op=vis * eout(prog(t, s0 + 0.4, 0.3)) * 0.85, fname="Medium", fill=(230, 230, 230))
 
-LIST = [("child", "Балалық шақ", 14.05), ("yurt", "Өскен ортасы", 14.25), ("family", "Отбасылық тәрбие", 14.45),
-        ("eye", "Өмірге көзқарас", 16.15)]
-
-def g_list(dst, t, end=17.95):
-    for i, (ic, txt, s) in enumerate(LIST):
+def sc_list(dst, t, sc):
+    """animated checklist: items = [[icon, text, t], ...] (icons: child yurt family eye person book chip network)"""
+    end = sc["e"]
+    a0, a1 = free_area(t)
+    n = len(sc["items"])
+    step = min(130, 520 / max(1, n - 1)) if n > 1 else 0
+    y0 = 400 - step * (n - 1) / 2
+    for i, (ic, txt, s) in enumerate(sc["items"]):
         p = prog(t, s, 0.5)
         if p <= 0:
             continue
         op = eout(p) * (1 - ein(prog(t, end - 0.35, 0.3)))
-        y = 185 + i * 130
-        b = icon_badge(ic)
-        warp(dst, b, 220, y, ry=(1 - eout(p)) * -90, s=lerp(0.5, 1.0, eback(p)), op=op)
-        text_draw(dst, txt, 310 + (1 - eout(p)) * -40, y, 50, op=op, anchor="l", fname="ExtraBold", fill=(255, 255, 255))
-        # active highlight: the newest item
-        if i == 3 or (t < 16.15 and i == 2):
-            k = window(t, s, end, 0.3, 0.3) * 0.5
-            cv2.line(dst, (310, int(y + 38)), (310 + int(380 * eout(prog(t, s + 0.2, 0.5))), int(y + 38)), (1.0, 0.8, 0.4), 3, cv2.LINE_AA)
+        y = y0 + i * step
+        warp(dst, icon_badge(ic), a0 + 100, y, ry=(1 - eout(p)) * -90, s=lerp(0.5, 1.0, eback(p)), op=op)
+        sz = fit_size(txt, "ExtraBold", 50, a1 - a0 - 200)
+        text_draw(dst, txt, a0 + 190 + (1 - eout(p)) * -40, y, sz, op=op, anchor="l", fname="ExtraBold", fill=(255, 255, 255))
+        nxt = sc["items"][i + 1][2] if i + 1 < n else end
+        if s <= t < nxt:
+            cv2.line(dst, (int(a0 + 190), int(y + 38)), (int(a0 + 190 + 380 * eout(prog(t, s + 0.2, 0.5))), int(y + 38)), (1.0, 0.8, 0.4), 3, cv2.LINE_AA)
 
-def g_cards(dst, t, s0=17.95, end=22.05):
+def sc_cards(dst, t, sc):
+    """character cards flip in: cards = [[kind, NAME, role, t], ...]; kinds: man_hat old_woman woman man boy"""
+    s0, end = sc["s"], sc["e"]
+    cards = sc["cards"]
     op_all = eout(prog(t, s0, 0.3)) * (1 - ein(prog(t, end - 0.3, 0.3)))
-    text_draw(dst, "КЕЙІПКЕРЛЕР", 960, 92, 44, op=op_all * eout(prog(t, s0 + 0.1, 0.4)), fname="ExtraBold", track=14,
-              fill=(255, 236, 190))
-    cv2.line(dst, (960 - int(170 * eout(prog(t, s0 + 0.2, 0.5))), 128), (960 + int(170 * eout(prog(t, s0 + 0.2, 0.5))), 128),
-             (1.0, 0.82, 0.45), 2, cv2.LINE_AA)
-    xs = [530, 960, 1390]
-    for i, (k, name, role, ts) in enumerate(CARDS):
+    if sc.get("head"):
+        text_draw(dst, sc["head"], 960, 92, 44, op=op_all * eout(prog(t, s0 + 0.1, 0.4)), fname="ExtraBold", track=14, fill=(255, 236, 190))
+        lw = int(170 * eout(prog(t, s0 + 0.2, 0.5)))
+        cv2.line(dst, (960 - lw, 128), (960 + lw, 128), (1.0, 0.82, 0.45), 2, cv2.LINE_AA)
+    n = len(cards)
+    gap = 430 if n <= 3 else 400
+    xs = [960 + (i - (n - 1) / 2) * gap for i in range(n)]
+    for i, (k, name, role, ts) in enumerate(cards):
         p = prog(t, ts - 0.15, 0.6)
         if p <= 0:
             continue
-        cd = char_card(k)
-        active = (i == 2 and t >= CARDS[2][3]) or (i < 2 and CARDS[i][3] <= t < CARDS[i + 1][3])
-        bright = 1.0 if active else 0.75
+        nxt = cards[i + 1][3] if i + 1 < n else 1e9
+        active = ts <= t < nxt
         y = 440 + 6 * math.sin(t * 2 + i)
-        warp(dst, cd, xs[i], y, ry=lerp(-100, 0, eback(p, 1.3)) + (2 * math.sin(t * 1.5 + i)), s=1.0 + (0.04 if active else 0),
-             op=op_all * eout(prog(t, ts - 0.15, 0.2)) * bright)
+        warp(dst, char_card(k), xs[i], y, ry=lerp(-100, 0, eback(p, 1.3)) + 2 * math.sin(t * 1.5 + i),
+             s=(1.04 if active else 1.0) * (0.92 if n > 3 else 1), op=op_all * eout(prog(t, ts - 0.15, 0.2)) * (1.0 if active else 0.75))
         q = prog(t, ts + 0.1, 0.4)
-        text_draw(dst, name, xs[i], y + 150, 44, op=op_all * eout(q), fname="Black", track=3,
+        text_draw(dst, name, xs[i], y + 150, fit_size(name, "Black", 44, 320, 3), op=op_all * eout(q), fname="Black", track=3,
                   grad=(GOLD_L, (214, 150, 40)), shadow=0.6)
-        text_draw(dst, role, xs[i], y + 196, 26, op=op_all * eout(q) * 0.9, fname="Medium", fill=(235, 235, 235))
+        text_draw(dst, role, xs[i], y + 196, fit_size(role, "Medium", 26, 320), op=op_all * eout(q) * 0.9, fname="Medium", fill=(235, 235, 235))
 
-def g_society(dst, t, face, z, px, py):
-    # network icon + label (left), 22.4–24.6
-    vis = window(t, 22.45, 24.7, 0.3, 0.3)
-    if vis > 0:
-        b = icon_badge("network", 150)
-        p = prog(t, 22.45, 0.5)
-        warp(dst, b, 300, 330, ry=(1 - eout(p)) * 80, s=lerp(0.5, 1, eback(p)), op=vis)
-        text_draw(dst, "ӘЛЕУМЕТТІК", 300, 470, 38, op=vis * eout(prog(t, 22.6, 0.3)), fname="ExtraBold", track=4, fill=(255, 236, 190))
-        text_draw(dst, "ҚАТЫНАСТАР", 300, 514, 38, op=vis * eout(prog(t, 22.7, 0.3)), fname="ExtraBold", track=4, fill=(255, 236, 190))
-    # traditions: yurt left + dombra right
-    s0, end = 24.85, 27.0
-    vis = window(t, s0, end, 0.3, 0.3)
-    if vis > 0:
-        draw_yurt(dst, t, s0, 300, 400, 380, op=vis)
-        text_draw(dst, "САЛТ-ДӘСТҮР", 300, 600, 40, op=vis * eout(prog(t, s0 + 0.5, 0.3)), fname="ExtraBold", track=6,
-                  fill=(255, 236, 190))
-        dmb = asset("dombra.png", height=640)
-        p = prog(t, s0 + 0.15, 0.7)
-        warp(dst, dmb, 1640, 400 + (1 - eout(p)) * 300, rz=lerp(-40, -16, eback(p)) + 2 * math.sin(t * 2),
-             ry=lerp(80, 10, eout(p)), s=1.0, op=vis)
+def sc_icon(dst, t, sc):
+    """single icon badge with 1-2 caption lines at x,y (use left/right of the head)"""
+    vis = window(t, sc["s"], sc["e"], 0.3, 0.3)
+    if vis <= 0:
+        return
+    x, y = sc.get("x", 300), sc.get("y", 330)
+    p = prog(t, sc["s"], 0.5)
+    warp(dst, icon_badge(sc["icon"], 150), x, y, ry=(1 - eout(p)) * 80, s=lerp(0.5, 1, eback(p)), op=vis)
+    for k, line in enumerate(sc.get("lines", [])):
+        text_draw(dst, line, x, y + 140 + 44 * k, 38, op=vis * eout(prog(t, sc["s"] + 0.15 + 0.1 * k, 0.3)), fname="ExtraBold", track=4, fill=(255, 236, 190))
 
-def g_era(dst, t, s0=27.05, end=31.7):
+def sc_yurt(dst, t, sc):
+    vis = window(t, sc["s"], sc["e"], 0.3, 0.3)
+    if vis <= 0:
+        return
+    x, y = sc.get("x", 300), sc.get("y", 400)
+    draw_yurt(dst, t, sc["s"], x, y, 380, op=vis)
+    if sc.get("label"):
+        text_draw(dst, sc["label"], x, y + 200, 40, op=vis * eout(prog(t, sc["s"] + 0.5, 0.3)), fname="ExtraBold", track=6, fill=(255, 236, 190))
+
+def sc_image(dst, t, sc):
+    """internet PNG (transparent) flies in with 3D: img, x, y, h, rz, label"""
+    vis = window(t, sc["s"], sc["e"], 0.3, 0.3)
+    if vis <= 0:
+        return
+    im = asset(sc["img"], height=sc.get("h", 500))
+    p = prog(t, sc["s"] + 0.05, 0.7)
+    rz = sc.get("rz", 0)
+    warp(dst, im, sc["x"], sc["y"] + (1 - eout(p)) * 300, rz=lerp(rz - 24, rz, eback(p)) + 2 * math.sin(t * 2),
+         ry=lerp(80, 10, eout(p)), op=vis)
+    if sc.get("label"):
+        text_draw(dst, sc["label"], sc["x"], sc["y"] + sc.get("h", 500) / 2 + 40, 38, op=vis * eout(prog(t, sc["s"] + 0.4, 0.3)),
+                  fname="ExtraBold", track=4, fill=(255, 236, 190))
+
+def sc_one_to_many(dst, t, sc):
+    """'one person' -> arrow -> crowd + big phrase (t1, t2, t3)"""
+    end = sc["e"]
+    a0, a1 = free_area(t)
     op_all = 1 - ein(prog(t, end - 0.35, 0.3))
-    # one person
-    p = prog(t, 28.55, 0.5)
+    x1 = a0 + 150
+    p = prog(t, sc["t1"], 0.5)
     if p > 0:
-        pi = icon("person", 150)
-        warp(dst, pi, 900, 300, s=lerp(0.4, 1.0, eback(p)), op=eout(p) * op_all)
-        text_draw(dst, "БІР АДАМ", 900, 440, 50, op=eout(p) * op_all, fname="Black", track=4, fill=(255, 255, 255))
-    # arrow
-    q = prog(t, 29.6, 0.7)
+        warp(dst, icon("person", 150), x1, 300, s=lerp(0.4, 1.0, eback(p)), op=eout(p) * op_all)
+        text_draw(dst, sc["one"], x1, 440, fit_size(sc["one"], "Black", 50, 300, 4), op=eout(p) * op_all, fname="Black", track=4, fill=(255, 255, 255))
+    q = prog(t, sc["t2"], 0.7)
     if q > 0:
-        x0, x1 = 1020, int(lerp(1020, 1240, eout(q)))
-        cv2.line(dst, (x0, 300), (x1, 300), (1.0, 0.82, 0.45), 5, cv2.LINE_AA)
+        xa, xb = int(x1 + 120), int(lerp(x1 + 120, x1 + 340, eout(q)))
+        cv2.line(dst, (xa, 300), (xb, 300), (1.0, 0.82, 0.45), 5, cv2.LINE_AA)
         if q > 0.6:
-            cv2.fillConvexPoly(dst, np.array([[x1 + 22, 300], [x1 - 6, 284], [x1 - 6, 316]], np.int32), (1.0, 0.82, 0.45), cv2.LINE_AA)
-    # crowd = era
-    r = prog(t, 30.3, 0.9)
+            cv2.fillConvexPoly(dst, np.array([[xb + 22, 300], [xb - 6, 284], [xb - 6, 316]], np.int32), (1.0, 0.82, 0.45), cv2.LINE_AA)
+    r = prog(t, sc["t3"], 0.9)
     if r > 0:
-        pi = icon("person", 64)
+        cx = (x1 + 480 + a1) / 2
         k = 0
         for row in range(3):
             for col in range(5):
-                d = prog(t, 30.3 + k * 0.035, 0.4)
-                warp(dst, pi, 1360 + col * 70, 215 + row * 72, s=eback(d), op=eout(d) * op_all * (0.6 + 0.4 * (row == 1)))
+                d = prog(t, sc["t3"] + k * 0.035, 0.4)
+                warp(dst, icon("person", 64), cx - 140 + col * 70, 215 + row * 72, s=eback(d), op=eout(d) * op_all * (0.6 + 0.4 * (row == 1)))
                 k += 1
-        text_draw(dst, "ТҰТАС ДӘУІР", 1500, 470, 64, op=eout(prog(t, 30.45, 0.4)) * op_all, s=lerp(1.4, 1, eout(prog(t, 30.45, 0.4))),
-                  fname="Black", grad=((255, 240, 190), (212, 148, 38)), extrude=6, ext_col=(95, 58, 12), shadow=0.7,
-                  glow=((255, 190, 80), 0.3))
-        gold_burst(dst, t, 30.5, 1500, 300, 60, 420)
+        e = prog(t, sc["t3"] + 0.15, 0.4)
+        text_draw(dst, sc["many"], cx, 470, fit_size(sc["many"], "Black", 64, a1 - x1 - 420), op=eout(e) * op_all, s=lerp(1.4, 1, eout(e)),
+                  fname="Black", grad=GRAD_GOLD, extrude=6, ext_col=(95, 58, 12), shadow=0.7, glow=((255, 190, 80), 0.3))
+        gold_burst(dst, t, sc["t3"] + 0.2, cx, 300, 60, 420)
 
-def g_era_label(dst, t, face, z, px, py):
-    bx, by = cam_pt(face["x1"] - 10, face["cy"] - 30, z, px, py)
-    label_tag(dst, t, 31.8, 33.1, "XIX ҒАСЫР", "қазақ даласы", bx + 150, by - 100, "r", anchor_pt=(bx + 20, by))
-
-def g_film(dst, t, s0=34.3, end=36.95):
+def sc_film(dst, t, sc):
+    """3D screen with a generated mini-cartoon (steppe, sun, yurts, rider) + title"""
+    s0, end = sc["s"], sc["e"]
     p = prog(t, s0, 0.7)
     op = eout(prog(t, s0, 0.25)) * (1 - ein(prog(t, end - 0.2, 0.2)))
-    mf = mini_film(t, s0)
+    mf = mini_film(t, s0, sc.get("title", ""), end - s0)
     warp(dst, mf, 960, 410, ry=lerp(70, -10, eout(p)) + 3 * math.sin(t), rx=lerp(20, 4, eout(p)), s=lerp(0.6, 0.98, eout(p)), op=op)
-    tag = "АНИМАЦИЯЛЫҚ ЖАРНАМА"
-    text_draw(dst, tag, 960, 66, 36, op=op * eout(prog(t, s0 + 0.3, 0.4)), fname="ExtraBold", track=10, fill=(255, 236, 190))
+    if sc.get("tag"):
+        text_draw(dst, sc["tag"], 960, 66, 36, op=op * eout(prog(t, s0 + 0.3, 0.4)), fname="ExtraBold", track=10, fill=(255, 236, 190))
 
-def g_tech(dst, t, s0=39.25, end=42.65):
+def sc_plus(dst, t, sc):
+    """icon A + icon B: a=[icon,label,t], b=[icon,label,t], t_plus"""
+    end = sc["e"]
+    a0, a1 = free_area(t)
     op_all = 1 - ein(prog(t, end - 0.35, 0.3))
-    for (ic, label, ts, x) in (("book", "ӘДЕБИ МҰРА", 39.3, 250), ("chip", "ЖАҢА ТЕХНОЛОГИЯ", 40.55, 700)):
+    xa, xb = a0 + (a1 - a0) * 0.22, a0 + (a1 - a0) * 0.78
+    for (ic, label, ts), x in ((sc["a"], xa), (sc["b"], xb)):
         p = prog(t, ts, 0.55)
         if p <= 0:
             continue
-        b = icon_badge(ic, 200)
-        warp(dst, b, x, 360 + 6 * math.sin(t * 2 + x), ry=(1 - eout(p)) * 100, s=lerp(0.4, 1.0, eback(p)), op=eout(p) * op_all)
-        text_draw(dst, label, x, 520, 36, op=eout(prog(t, ts + 0.2, 0.3)) * op_all, fname="ExtraBold", track=3, fill=(255, 236, 190))
-    q = prog(t, 40.25, 0.35)
+        warp(dst, icon_badge(ic, 200), x, 360 + 6 * math.sin(t * 2 + x), ry=(1 - eout(p)) * 100, s=lerp(0.4, 1.0, eback(p)), op=eout(p) * op_all)
+        text_draw(dst, label, x, 520, fit_size(label, "ExtraBold", 36, (a1 - a0) * 0.46, 3), op=eout(prog(t, ts + 0.2, 0.3)) * op_all,
+                  fname="ExtraBold", track=3, fill=(255, 236, 190))
+    q = prog(t, sc["t_plus"], 0.35)
     if q > 0:
-        text_draw(dst, "+", 475, 360, 110, op=eout(q) * op_all, s=eback(q), fname="Black", fill=(255, 210, 120), shadow=0.5)
-    gold_burst(dst, t, 40.6, 700, 360, 60, 300)
+        text_draw(dst, sc.get("sign", "+"), (xa + xb) / 2, 360, 110, op=eout(q) * op_all, s=eback(q), fname="Black", fill=(255, 210, 120), shadow=0.5)
+    gold_burst(dst, t, sc["b"][2] + 0.05, xb, 360, 60, 300)
 
-def g_bridge(dst, t, face, z, px, py):
-    s0, end = 42.75, 45.9
+def sc_bridge(dst, t, sc, face, z, px, py):
+    """two words at both sides of the head + gold arc over the head (face tracked)"""
+    s0, end = sc["s"], sc["e"]
     vis = window(t, s0, end, 0.3, 0.3)
     if vis <= 0:
         return
@@ -1113,12 +1153,12 @@ def g_bridge(dst, t, face, z, px, py):
     R = cam_pt(face["x1"] + 30, face["cy"] - 60, z, px, py)
     lx, rx = L[0] - 230, R[0] + 230
     yy = L[1]
-    p1 = prog(t, s0, 0.4); p2 = prog(t, 43.3, 0.4)
-    text_draw(dst, "ӨТКЕН", lx, yy, 64, op=vis * eout(p1), s=lerp(0.6, 1, eback(p1)), ry=(1 - eout(p1)) * 70, fname="Black",
-              grad=((255, 240, 190), (212, 148, 38)), extrude=5, ext_col=(95, 58, 12), shadow=0.8)
-    text_draw(dst, "БҮГІН", rx, yy, 64, op=vis * eout(p2), s=lerp(0.6, 1, eback(p2)), ry=(1 - eout(p2)) * -70, fname="Black",
-              fill=(255, 255, 255), extrude=5, ext_col=(60, 60, 70), shadow=0.8)
-    a = prog(t, 43.8, 0.9)
+    p1 = prog(t, s0, 0.4); p2 = prog(t, sc["t2"], 0.4)
+    text_draw(dst, sc["left"], lx, yy, 64, op=vis * eout(p1), s=lerp(0.6, 1, eback(p1)), ry=(1 - eout(p1)) * 70, fname="Black",
+              grad=GRAD_GOLD, extrude=5, ext_col=(95, 58, 12), shadow=0.9)
+    text_draw(dst, sc["right"], rx, yy, 64, op=vis * eout(p2), s=lerp(0.6, 1, eback(p2)), ry=(1 - eout(p2)) * -70, fname="Black",
+              fill=(255, 255, 255), extrude=5, ext_col=(60, 60, 70), shadow=0.9)
+    a = prog(t, sc["t_arc"], 0.9)
     if a > 0:
         top = cam_pt(face["cx"], face["top"], z, px, py)[1]
         peak = max(30, top - 40)
@@ -1134,21 +1174,38 @@ def g_bridge(dst, t, face, z, px, py):
             cv2.polylines(lay, [np.array(pts, np.int32)], False, 1.0, 4, cv2.LINE_AA)
             lay = (lay + cv2.GaussianBlur(lay, (0, 0), 6) * 1.5)[..., None] * vis
             dst += lay * np.array([1.0, 0.8, 0.4], np.float32)
-            hx, hy = pts[-1]
-            cv2.circle(dst, (hx, hy), 9, (1.0, 0.95, 0.8), -1, cv2.LINE_AA)
+            cv2.circle(dst, pts[-1], 9, (1.0, 0.95, 0.8), -1, cv2.LINE_AA)
 
-def g_end(dst, t, s0=49.0):
+def sc_end(dst, t, sc):
+    s0 = sc["s"]
     p = prog(t, s0, 0.6)
-    cov = framed("cover.png", 560)
-    warp(dst, cov, 560, 420, ry=lerp(-70, -14, eout(p)) + 3 * math.sin(t), s=lerp(0.7, 1, eout(p)), op=eout(prog(t, s0, 0.25)))
+    cx = 960
+    if sc.get("img"):
+        warp(dst, framed(sc["img"], 560), 560, 420, ry=lerp(-70, -14, eout(p)) + 3 * math.sin(t), s=lerp(0.7, 1, eout(p)), op=eout(prog(t, s0, 0.25)))
+        cx = 1270
     q = prog(t, s0 + 0.15, 0.5)
-    text_draw(dst, "АБАЙ ЖОЛЫ", 1270, 360, 130, op=eout(q), s=lerp(1.3, 1, eout(q)), fname="Black",
-              grad=((255, 240, 190), (212, 148, 38)), extrude=9, ext_col=(95, 58, 12), shadow=0.7, glow=((255, 190, 80), 0.25))
-    text_draw(dst, "I ТОМ  ·  МҰХТАР ӘУЕЗОВ", 1270, 490, 40, op=eout(prog(t, s0 + 0.35, 0.4)), fname="Bold", track=6, fill=(255, 240, 210))
-    gold_burst(dst, t, s0 + 0.2, 1270, 360, 80, 520)
+    lines = sc["title"].split("\n")
+    for li, line in enumerate(lines):
+        sz = fit_size(line, "Black", 130, 1000 if sc.get("img") else 1600)
+        text_draw(dst, line, cx, 360 + (li - (len(lines) - 1) / 2) * 135, sz, op=eout(q), s=lerp(1.3, 1, eout(q)), fname="Black",
+                  grad=GRAD_GOLD, extrude=9, ext_col=(95, 58, 12), shadow=0.7, glow=((255, 190, 80), 0.25))
+    if sc.get("sub"):
+        text_draw(dst, sc["sub"], cx, 360 + 68 * len(lines) + 60, fit_size(sc["sub"], "Bold", 40, 1000, 6),
+                  op=eout(prog(t, s0 + 0.35, 0.4)), fname="Bold", track=6, fill=(255, 240, 210))
+    gold_burst(dst, t, s0 + 0.2, cx, 360, 80, 520)
+
+SCENE_FN = dict(title=sc_title, volume=sc_volume, medallion=sc_medallion, list=sc_list, cards=sc_cards, icon=sc_icon,
+                yurt=sc_yurt, image=sc_image, one_to_many=sc_one_to_many, film=sc_film, plus=sc_plus, end=sc_end)
+FACE_SCENES = dict(label=sc_label, bridge=sc_bridge)
 
 # ------------------------------------------------------------------ frame
-MODE_SWITCH = [4.70, 7.05, 17.95, 22.05, 34.30, 36.95, 49.0]
+def mode_switches():
+    out = []
+    for a, b in zip(SEGS, SEGS[1:]):
+        if "bg" in (a[2], b[2]):
+            out.append(b[0])
+    return out
+MODE_SWITCH = mode_switches()
 
 def render_frame(t, src_u8):
     i, seg = seg_at(t)
@@ -1167,43 +1224,32 @@ def render_frame(t, src_u8):
             out = out * (1 - alpha) + person * alpha
     elif mode == "bg":
         out = draw_bg(t)
-    else:  # pip
-        out = draw_bg(t, orn_xy=(seg[3]["rect"][0] + seg[3]["rect"][2] / 2, seg[3]["rect"][1] + seg[3]["rect"][3] / 2), orn_op=0.10)
+    else:
+        r = seg[3]["rect"]
+        out = draw_bg(t, orn_xy=(r[0] + r[2] / 2, r[1] + r[3] / 2), orn_op=0.10)
         p, geom = pip_geom(t, i, seg)
         face_window(out, src, t, geom, p)
-    # graphics
-    if mode == "full":
-        if t < 4.75: g_intro(out, t, face, z, px, py)
-        if 10.0 < t < 12.1: g_abai(out, t)
-        if 22.0 < t < 27.1: g_society(out, t, face, z, px, py)
-        if 31.7 < t < 33.2: g_era_label(out, t, face, z, px, py)
-        if 42.6 < t < 46.0: g_bridge(out, t, face, z, px, py)
-    elif mode == "bg":
-        if 4.6 < t < 7.1: g_title(out, t)
-        if 17.9 < t < 22.1: g_cards(out, t)
-        if 34.2 < t < 37.0: g_film(out, t)
-        if t >= 49.0: g_end(out, t)
-    else:
-        if 7.0 < t < 10.1: g_volume(out, t)
-        if 13.9 < t < 18.0: g_list(out, t)
-        if 27.0 < t < 31.8: g_era(out, t)
-        if 39.2 < t < 42.7: g_tech(out, t)
-    # bottom gradient + subtitles
+    for sc in SCENES:
+        if not (sc["s"] - 0.05 <= t < sc.get("e", DUR + 1) + 0.05):
+            continue
+        if sc["type"] in FACE_SCENES:
+            if mode == "full":
+                FACE_SCENES[sc["type"]](out, t, sc, face, z, px, py)
+        else:
+            SCENE_FN[sc["type"]](out, t, sc)
     out *= (1 - bottom_grad())
     if mode == "full":
         chin = max(face_at(t + d)["y1"] for d in (-0.3, 0, 0.3, 0.6))
-        chin_o = cam_pt(0, chin, z, px, py)[1]
-        yc = clamp(max(790, chin_o + 78), 790, 985)
+        yc = clamp(max(790, cam_pt(0, chin, z, px, py)[1] + 78), 790, 985)
     else:
         yc = 820
     draw_subs(out, t, subs_y(t, yc))
     flash(out, t, MODE_SWITCH)
-    # cinematic finishing
     out *= vignette()
     out += grain(int(t * FPS) % 6)
-    # fade at very end
-    out *= 1 - 0.0 * prog(t, DUR - 0.3, 0.3)
     return (np.clip(out, 0, 1) * 255 + 0.5).astype(np.uint8)
+
+SCENES = CFG.get("scenes", [])
 
 _SUBY = {}
 def subs_y(t, yc):
@@ -1290,3 +1336,176 @@ if __name__ == "__main__":
                 fh.write("file '%s'\n" % os.path.abspath(p_))
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", out + ".txt", "-c", "copy", out], check=True)
         print("done", out)
+
+
+
+# ------------------------------------------------------------------ sound design (auto from plan.json)
+def build_sfx(path):
+    import wave
+    SR = 48000
+    rng = np.random.default_rng(11)
+    N = int(DUR * SR) + SR
+    Lc = np.zeros(N, np.float32); Rc = np.zeros(N, np.float32)
+    def db(x): return 10 ** (x / 20)
+    def tt(d): return np.arange(int(d * SR)) / SR
+    def nrm(x): return x / (np.max(np.abs(x)) + 1e-9)
+    def lp(x, a):
+        y = np.zeros_like(x); st = 0.0; a = np.broadcast_to(a, x.shape)
+        for i in range(len(x)):
+            st += a[i] * (x[i] - st); y[i] = st
+        return y
+    def whoosh(d=0.5, up=True):
+        n = int(d * SR); x = rng.standard_normal(n)
+        c = np.linspace(0.02, 0.25, n) if up else np.linspace(0.25, 0.02, n)
+        return nrm((lp(x, c) - lp(x, c * 0.15)) * np.sin(np.pi * np.linspace(0, 1, n)) ** 2)
+    def impact(d=1.2):
+        t = tt(d); f = 45 + 90 * np.exp(-t * 18)
+        return nrm(np.sin(2 * np.pi * np.cumsum(f) / SR) * np.exp(-t * 3.2) + 0.5 * lp(rng.standard_normal(len(t)), 0.3) * np.exp(-t * 40))
+    def pop():
+        t = tt(0.14); f = 700 * np.exp(-t * 12) + 300
+        return nrm(np.sin(2 * np.pi * np.cumsum(f) / SR) * np.minimum(1, t / 0.002) * np.exp(-t * 30))
+    def tick():
+        t = tt(0.04); return nrm(np.convolve(rng.standard_normal(len(t)) * np.exp(-t * 180), [1, -0.95], "same"))
+    def shimmer(d=0.9):
+        t = tt(d); y = np.zeros(len(t))
+        for k in range(14):
+            st = rng.uniform(0, d * 0.6); f = rng.uniform(2400, 6200); m = t >= st; u = t[m] - st
+            y[m] += np.sin(2 * np.pi * f * u) * np.exp(-u * 9) * rng.uniform(0.4, 1)
+        return nrm(y * np.minimum(1, t / 0.01))
+    def riser(d=0.8):
+        t = tt(d); x = rng.standard_normal(len(t))
+        return nrm(lp(x, np.linspace(0.01, 0.35, len(t))) * (t / d) ** 2 + np.sin(2 * np.pi * np.cumsum(200 + 900 * (t / d) ** 2) / SR) * (t / d) ** 3 * 0.3)
+    def pluck(f=196, d=1.2):
+        n = int(d * SR); p = int(SR / f); buf = rng.uniform(-1, 1, p); y = np.zeros(n)
+        for i in range(n):
+            y[i] = buf[i % p]; buf[i % p] = 0.996 * 0.5 * (buf[i % p] + buf[(i + 1) % p])
+        return nrm(y)
+    def ding(f=1320):
+        t = tt(0.8)
+        return nrm((np.sin(2 * np.pi * f * t) + 0.4 * np.sin(2 * np.pi * f * 2.76 * t)) * np.exp(-t * 6) * np.minimum(1, t / 0.003))
+    def key():
+        t = tt(0.05); return nrm(lp(rng.standard_normal(len(t)) * np.exp(-t * 120), 0.5) + 0.5 * np.sin(2 * np.pi * 2200 * t) * np.exp(-t * 200))
+    def add(sig, t0, g, pan=0.0):
+        i = int(max(0, t0) * SR); x = sig * db(g); j = min(N, i + len(x)); x = x[:j - i]
+        Lc[i:j] += x * (1 - max(0, pan)); Rc[i:j] += x * (1 + min(0, pan))
+    for a, b in zip(SEGS, SEGS[1:]):
+        T = b[0]
+        if b[2] == "bg":
+            add(riser(0.7), T - 0.7, -26); add(whoosh(0.45), T - 0.25, -21); add(impact(), T, -15)
+        else:
+            add(whoosh(0.4, up=b[2] == "pip"), T - 0.15, -22)
+        if a[2] == "pip" and b[2] == "full":
+            add(whoosh(0.4, up=False), b[0] - 0.6, -24)
+    for c in CH:
+        add(tick(), c["s"], -32)
+        prev = False
+        for it in c["items"]:
+            if it["a"] and not prev:
+                add(pop(), it["s"], -24); add(shimmer(0.8), it["s"], -30)
+            prev = it["a"]
+    for b in BEHIND:
+        if b[3] == "rise":
+            add(whoosh(0.6), b[0] - 0.15, -20); add(impact(0.7), b[0] + 0.1, -21)
+        else:
+            for k in range(len(b[2])): add(key(), b[0] + k * 0.06, -24, pan=rng.uniform(-0.3, 0.3))
+            add(impact(0.6), b[0] + len(b[2]) * 0.06, -24)
+    for sc in SCENES:
+        ty, s0 = sc["type"], sc["s"]
+        if ty == "label": add(whoosh(0.3), s0 - 0.05, -27); add(pop(), s0 + 0.2, -26)
+        elif ty == "title":
+            for k in range(len(sc["title"])): add(tick(), s0 + 0.1 + k * 0.05, -26)
+            add(shimmer(1.2), s0 + 0.7, -28)
+        elif ty == "volume":
+            add(whoosh(0.7), s0 + 0.2, -22)
+            if sc.get("t_num"): add(impact(0.8), sc["t_num"] + 0.05, -22); add(shimmer(0.9), sc["t_num"] + 0.1, -27)
+        elif ty == "medallion": add(whoosh(0.35), s0 - 0.05, -25); add(ding(990), s0 + 0.2, -30)
+        elif ty == "list":
+            for it in sc["items"]: add(pop(), it[2], -24); add(ding(1480), it[2] + 0.05, -33)
+        elif ty == "cards":
+            for c in sc["cards"]: add(whoosh(0.3), c[3] - 0.15, -24); add(pop(), c[3] + 0.1, -24)
+        elif ty == "icon": add(pop(), s0, -24); add(shimmer(0.5), s0 + 0.05, -32)
+        elif ty == "yurt": add(shimmer(1.0), s0, -29)
+        elif ty == "image":
+            add(whoosh(0.5), s0, -24)
+            if sc.get("pluck"):
+                for k, f in enumerate((196, 262, 196, 294)): add(pluck(f), s0 + 0.25 + k * 0.17, -27, pan=0.4)
+        elif ty == "one_to_many":
+            add(pop(), sc["t1"], -24); add(whoosh(0.5), sc["t2"], -26)
+            for k in range(15): add(tick(), sc["t3"] + k * 0.035, -30)
+            add(impact(0.9), sc["t3"] + 0.15, -20)
+        elif ty == "film": add(shimmer(1.4), s0 + 1.3, -30)
+        elif ty == "plus":
+            add(pop(), sc["a"][2], -24); add(pop(), sc["t_plus"], -26); add(pop(), sc["b"][2], -24); add(shimmer(0.8), sc["b"][2] + 0.05, -29)
+        elif ty == "bridge":
+            for T in (s0, sc["t2"]): add(whoosh(0.3), T - 0.05, -27); add(pop(), T + 0.2, -26)
+            add(shimmer(1.2), sc["t_arc"], -28)
+        elif ty == "end": add(shimmer(1.2), s0 + 0.2, -27)
+    st = np.stack([Lc, Rc], 1)[:int(DUR * SR)]
+    print("sfx peak dBFS %.1f" % (20 * np.log10(np.max(np.abs(st)) + 1e-9)))
+    with wave.open(path, "wb") as w_:
+        w_.setnchannels(2); w_.setsampwidth(2); w_.setframerate(SR)
+        w_.writeframes((np.clip(st, -1, 1) * 32767).astype("<i2").tobytes())
+
+def build_cover(path):
+    cv_ = CFG["cover"]
+    fr = grab(cv_["t"])
+    src = fr.astype(np.float32) / 255
+    a = person_alpha(fr)
+    out = draw_bg(3.0, orn_xy=(1330, 470), orn_op=0.16)
+    gl = np.zeros((H, W), np.float32); cv2.circle(gl, (1330, 420), 330, 1, -1)
+    out += cv2.GaussianBlur(gl, (0, 0), 120)[..., None] * np.array([0.5, 0.36, 0.14], np.float32)
+    fc = face_at(cv_["t"])
+    dx = 1330 - fc["cx"] * 1.12
+    M = np.float32([[1.12, 0, dx], [0, 1.12, -10]])
+    ps = cv2.warpAffine(src, M, (W, H)); pa = cv2.warpAffine(a[..., 0], M, (W, H))[..., None]
+    edge = np.clip(pa[..., 0] - cv2.erode(pa[..., 0], np.ones((9, 9), np.uint8)), 0, 1)
+    out = out * (1 - pa) + ps * pa
+    out += cv2.GaussianBlur(edge, (0, 0), 4)[..., None] * np.array([0.9, 0.65, 0.25], np.float32) * 0.6
+    out *= (1 - bottom_grad() * 0.8)
+    if cv_.get("author"):
+        text_draw(out, cv_["author"], 560, 210, fit_size(cv_["author"], "Bold", 46, 760, 12), fname="Bold", track=12, fill=(240, 230, 205))
+    lines = cv_["lines"]
+    y0 = 485 - (len(lines) - 1) * 105
+    for k, line in enumerate(lines):
+        text_draw(out, line, 560, y0 + k * 210, fit_size(line, "Black", 210, 820), fname="Black", grad=GRAD_GOLD, extrude=12,
+                  ext_col=(95, 58, 12), shadow=0.8, glow=((255, 190, 80), 0.3))
+    if cv_.get("tag"):
+        cv2.line(out, (330, 735), (790, 735), (1.0, 0.82, 0.45), 3, cv2.LINE_AA)
+        text_draw(out, cv_["tag"], 560, 810, fit_size(cv_["tag"], "Black", 84, 760, 10), fname="Black", track=10, fill=(255, 255, 255), shadow=0.8)
+    if cv_.get("img"):
+        warp(out, framed(cv_["img"], 330), 1680, 790, ry=-22, rz=6)
+    out *= vignette()
+    Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8)).save(path)
+
+def build_sheet(path, outdir):
+    os.makedirs(outdir, exist_ok=True)
+    items = CFG["sketch"]
+    f = font("Bold", 30)
+    cw, chh, bar = 960, 540, 52
+    rows = (len(items) + 1) // 2
+    S = Image.new("RGB", (cw * 2, (chh + bar) * rows), (18, 18, 18))
+    d = ImageDraw.Draw(S)
+    for i, (t, cap) in enumerate(items):
+        img = Image.fromarray(render_frame(t, grab(t)))
+        x, y = (i % 2) * cw, (i // 2) * (chh + bar)
+        d.text((x + 16, y + 10), "%d. %d:%02d %s" % (i + 1, int(t) // 60, int(t) % 60, cap), font=f, fill=(255, 220, 140))
+        S.paste(img.resize((cw - 8, chh - 4)), (x + 4, y + bar))
+    S.save(path, quality=86)
+    print("sheet", path, S.size)
+
+def build_final(src, out):
+    wav = D + "/sfx.wav"
+    build_sfx(wav)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", D + "/video.mp4", "-i", src, "-i", wav, "-filter_complex",
+                    "[1:a:0]aformat=sample_rates=48000:channel_layouts=stereo[v];[v][2:a]amix=inputs=2:normalize=0:duration=first[a]",
+                    "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-preset", "slow", "-crf", "19", "-maxrate", "13M", "-bufsize", "26M",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-t", "%.3f" % DUR, "-movflags", "+faststart", out], check=True)
+    print("final", out, os.path.getsize(out) // 1e6, "MB")
+
+if __name__ == "__main__" and sys.argv[1] in ("sfx", "cover", "sheet", "final"):
+    init()
+    c = sys.argv[1]
+    if c == "sfx": build_sfx(sys.argv[2])
+    elif c == "cover": build_cover(sys.argv[2])
+    elif c == "sheet": build_sheet(sys.argv[2], D + "/sk")
+    else: build_final(sys.argv[2], sys.argv[3])

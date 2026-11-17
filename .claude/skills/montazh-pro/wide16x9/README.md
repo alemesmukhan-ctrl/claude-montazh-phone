@@ -11,17 +11,23 @@
    `eq=contrast=1.12:saturation=0.78:gamma=0.94,colorbalance=rs=-0.10:gs=-0.03:bs=0.12:rm=-0.06:gm=-0.01:bm=0.06:rh=0.03:gh=0.0:bh=-0.02,curves=master='0/0.045 0.25/0.19 0.6/0.61 1/0.94':b='0/0.04 1/0.98'` (libx264 crf 10, без звука).
 5. `pro.py probe / analyze / words --lang kk` (words.json, faces.json в .montazh/<имя>/).
    Whisper может найти лишнюю фразу после текста — смотри whisper_ref.json и добавь её в `EXTRA`.
-6. Скопируй шаблоны: `cp .claude/skills/montazh-pro/wide16x9/*.py .montazh/<имя>/`, картинки → `.montazh/<имя>/assets/`.
-   В `render.py` правь ТОЛЬКО: `CHUNKS` (+ `*акценты*`), `EXTRA`, `SEGS` (режимы full / pip / bg и рамки), `ZK` (наезды),
-   `BEHIND` (2 раза текст за спиной), функции `g_*` (тексты/картинки сцен) и вызовы в `render_frame`, `MODE_SWITCH`.
-   В `sfx.py` — времена событий. `DUR` = длительность исходника.
-7. Эскизы: `python render.py sketch sk t1 t2 …` (16 кадров, ~10 с) → лист 2×8 с подписями → `Эскизы/<имя>_эскизы.jpg` → push + ссылка.
-8. После «ок»: в фоне `python render.py render video.mp4` (4 процесса, ~5 мин на 50 с) → `python sfx.py sfx.wav` →
-   ffmpeg: видео + голос (`[1:a:0]`, без изменений) + sfx через `amix=normalize=0`, `-crf 19 -maxrate 13M` → `Готовые/<имя>_v1.mp4` (≤ 90 МБ).
-   Пока рендер идёт — обложка `cover.py` (кадр со спокойным лицом: min lips в faces.json).
-9. Сдача: git push + ссылки **и** SendUserFile (файлы приходят прямо в чат — пользователю так удобнее).
+6. Подготовь папку: `cp .claude/skills/montazh-pro/wide16x9/engine.py .montazh/<имя>/` и
+   `cp .claude/skills/montazh-pro/wide16x9/plan_example_abai.json .montazh/<имя>/plan.json`.
+   Картинки (фото книги от пользователя + из интернета) → `.montazh/<имя>/assets/` (вырезать фон: `prep_assets.py` как образец).
+   **Код не трогать — правится только `plan.json`:** `dur`, `chunks` (*акценты*), `extra`, `segs` (full/bg/pip),
+   `zoom`, `hard`, `behind` (2 раза), `scenes`, `cover`, `sketch`.
+   Типы сцен: `label` (подпись у головы, side l/r), `title` (обложка + 3D-заголовок, `\n` = 2 строки), `volume` (фото книги крутится + большая цифра),
+   `medallion` (овальный портрет), `list` (иконки: child yurt family eye person book chip network), `cards` (герои: man_hat man boy old_woman woman),
+   `icon`, `yurt`, `image` (PNG из интернета, `pluck`: перебор домбры), `one_to_many`, `film` (мини-мультфильм в 3D-экране),
+   `plus` (A + B), `bridge` (два слова по бокам головы + дуга), `end`.
+   Правило ритма: каждые 3–6 с смена режима; bg 3–4 раза по 2–4 с; pip 3–4 раза (прямоугольник, круг, квадрат); текст за спиной 2 раза,
+   там где голова ниже y≈100 (faces.json `top`). Звук строится сам по сценам.
+7. Эскизы: `/opt/mzpro/bin/python engine.py sheet ../../Эскизы/<имя>_эскизы.jpg` (~15 с) → сам посмотри → push + ссылка + SendUserFile.
+8. После «ок» (в фоне): `engine.py render video.mp4` (~5 мин на 50 с) → `engine.py final ../../Исходники/<имя>.mp4 ../../Готовые/<имя>_v1.mp4`
+   (голос без изменений + авто-звук, ≤ 90 МБ). Пока рендер — `engine.py cover ../../Готовые/<имя>_обложка_v1.png` (кадр: min lips в faces.json).
+9. Сдача: git push + ссылки **и** SendUserFile (файлы приходят прямо в чат).
 
-Запуск всех скриптов: `/opt/mzpro/bin/python` (там cv2, mediapipe).
+Тайм-план 15 мин: 0–3 скачать+setup+вопросы, 3–6 анализ/whisper/цвет (параллельно), 6–9 plan.json, 9–10 эскизы, 10–15 рендер+обложка+сдача.
 
 ## Картинки из интернета
 Wikimedia Commons API (User-Agent обязателен), `iiurlwidth=960` (стандартные размеры, иначе 429). Пауза 2–3 с между запросами.
